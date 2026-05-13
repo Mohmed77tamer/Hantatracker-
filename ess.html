@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Hanta Tracker V1.4</title>
+    <!-- Importing Source Sans 3 weights: 200 (Extra-Light), 400 (Regular), 700 (Bold), 900 (Black) -->
+    <link href="https://fonts.googleapis.com/css2?family=Source+Sans+3:wght@200;400;700;900&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        :root { --bg: #0a0a0a; --text: #f0f0f0; --blue-accent: #0066ff; --red-accent: #ff0000; --green-accent: #00ff41; }
+        body { font-family: 'Source Sans 3', sans-serif; background: var(--bg); color: var(--text); margin: 0; overflow: hidden; }
+        .app-container { display: flex; flex-direction: column; height: 100vh; }
+        
+        /* UI Elements */
+        .top-bar { padding: 12px 20px; background: #111; border-bottom: 1px solid #333; z-index: 1001; display: flex; justify-content: space-between; align-items: center; }
+        .top-bar h1 { margin: 0; font-size: 14px; font-weight: 900; letter-spacing: 2px; }
+        #status { color: var(--green-accent); font-size: 11px; font-family: monospace; }
+
+        #map { flex-grow: 1; width: 100%; filter: saturate(0.8); }
+
+        /* Country Labels: Source Sans Extra Light (Weight 200) */
+        .country-label {
+            background: none !important; border: none !important; box-shadow: none !important;
+            color: rgba(255, 255, 255, 0.4); font-family: 'Source Sans 3', sans-serif;
+            font-weight: 200; font-size: 14px; text-transform: uppercase;
+            letter-spacing: 4px; white-space: nowrap; pointer-events: none;
+        }
+
+        /* Log Terminal with Fade */
+        .terminal { 
+            position: absolute; bottom: 100px; left: 15px; 
+            background: rgba(0,0,0,0.8); font-size: 10px; padding: 6px 10px; 
+            color: var(--green-accent); border-left: 3px solid var(--green-accent); 
+            font-family: monospace; pointer-events: none; z-index: 1001;
+            opacity: 1; transition: opacity 1s ease-out;
+        }
+        .terminal.hidden { opacity: 0; }
+
+        /* Custom Popup Styling */
+        .leaflet-popup-content-wrapper { background: #1a1a1a; color: #fff; border-radius: 0; font-family: 'Source Sans 3', sans-serif; }
+        .leaflet-popup-tip { background: #1a1a1a; }
+        .status-header { border-bottom: 1px solid #444; margin-bottom: 5px; padding-bottom: 5px; font-weight: 700; text-transform: uppercase; font-size: 12px; }
+        .red-status { color: var(--red-accent); }
+        .green-status { color: var(--green-accent); }
+
+        /* Sync Button Styling */
+        @keyframes slideDown { from { transform: translate(-50%, 0); opacity: 1; } to { transform: translate(-50%, 300%); opacity: 0; } }
+        @keyframes slideUp { from { transform: translate(-50%, 300%); opacity: 0; } to { transform: translate(-50%, 0); opacity: 1; } }
+
+        .sync-btn {
+            position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%);
+            z-index: 1000; padding: 12px 40px; font-weight: 200; font-size: 18px;
+            text-transform: uppercase; letter-spacing: 3px; color: white; border: 1px solid rgba(255,255,255,0.4); 
+            cursor: pointer; background: linear-gradient(135deg, #0044cc 0%, #0044cc 30%, #002288 30%, #002288 60%, #001144 60%, #001144 100%);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.5);
+        }
+        .sync-btn.hiding { animation: slideDown 0.5s forwards; }
+        .sync-btn.showing { animation: slideUp 0.5s forwards; }
+
+        #loading-text { position: absolute; bottom: 45px; left: 50%; transform: translateX(-50%); display: none; font-weight: 200; font-size: 14px; color: var(--blue-accent); z-index: 999; letter-spacing: 5px; }
+
+        /* Marker Icons */
+        .pulse-active { width: 12px; height: 12px; background: var(--red-accent); border: 1px solid #fff; animation: pulse 0.6s steps(2) infinite; }
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.2; } }
+    </style>
+</head>
+<body>
+
+<div class="app-container">
+    <div class="top-bar">
+        <h1>HANTA_V1.4</h1>
+        <div id="status">SYS_STATUS: NOMINAL // 13.05.2026</div>
+    </div>
+    
+    <div id="map"></div>
+    <div class="terminal" id="term">LOG: GEOSPATIAL_LOAD_READY...</div>
+    
+    <div id="loading-text">UPDATING_DATASET</div>
+    <button id="update-btn" class="sync-btn" onclick="triggerUpdate()">Force Update</button>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+    var map = L.map('map', { zoomControl: false, minZoom: 2 }).setView([15, 10], 2);
+    
+    // Dark base layer
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+    
+    var dataLayer = L.layerGroup().addTo(map);
+    var labelLayer = L.layerGroup().addTo(map);
+    var activeIcon = L.divIcon({ className: 'pulse-active', iconSize: [12, 12] });
+    var logTimer;
+
+    function log(msg) { 
+        const term = document.getElementById('term');
+        term.innerText = "LOG: " + msg;
+        term.classList.remove('hidden');
+        clearTimeout(logTimer);
+        logTimer = setTimeout(() => { term.classList.add('hidden'); }, 2000); 
+    }
+
+    // New: Dynamic Country Labels (Source Sans Extra Light)
+    function renderLabels() {
+        labelLayer.clearLayers();
+        const countries = [
+            { name: "Egypt", pos: [26.8, 30.8] },
+            { name: "Italy", pos: [41.8, 12.5] },
+            { name: "Spain", pos: [40.4, -3.7] },
+            { name: "Tenerife", pos: [28.3, -16.5] }
+        ];
+        countries.forEach(c => {
+            L.marker(c.pos, {
+                icon: L.divIcon({ className: 'country-label', html: c.name }),
+                interactive: false
+            }).addTo(labelLayer);
+        });
+    }
+
+    function loadInitial() {
+        // RED ICON: Active Outbreak (MV Hondius Cluster)
+        L.marker([28.46, -16.25], {icon: activeIcon}).addTo(dataLayer).bindPopup(`
+            <div class="status-header red-status">Active Outbreak</div>
+            <b>Location:</b> Port of Tenerife<br>
+            <b>Target:</b> MV Hondius Cluster<br>
+            <b>Cases:</b> 11 Confirmed/Probable<br>
+            <b>Status:</b> Strict Quarantine Active
+        `);
+
+        // GREEN ICON: Monitored/Safe Region
+        L.circleMarker([26.82, 30.80], { color: '#00ff41', radius: 8, fillOpacity: 0.5 }).addTo(dataLayer).bindPopup(`
+            <div class="status-header green-status">Region Clear</div>
+            <b>Country:</b> Egypt<br>
+            <b>Status:</b> Surveillance Active<br>
+            <b>Alert Level:</b> Nominal
+        `);
+
+        renderLabels();
+        log("STRATEGIC_MAP_LOADED");
+    }
+
+    loadInitial();
+
+    async function triggerUpdate() {
+        const btn = document.getElementById('update-btn');
+        const loader = document.getElementById('loading-text');
+        btn.classList.add('hiding');
+        
+        setTimeout(() => {
+            btn.style.display = 'none';
+            loader.style.display = 'block';
+        }, 500);
+
+        log("CONTACTING_REMOTE_SERVERS...");
+
+        // Simulate successful data pull for the demo
+        setTimeout(() => {
+            loader.style.display = 'none';
+            btn.style.display = 'block';
+            btn.classList.remove('hiding');
+            btn.classList.add('showing');
+            log("DATA_SYNC_SUCCESS");
+        }, 1500);
+    }
+</script>
+</body>
+</html>
