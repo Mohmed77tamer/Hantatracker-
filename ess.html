@@ -136,7 +136,7 @@
         `);
 
         renderLabels();
-        log("STRATEGIC_MAP_LOADED");
+        log("map loaded!");
     }
 
     loadInitial();
@@ -151,7 +151,7 @@
             loader.style.display = 'block';
         }, 500);
 
-        log("CONTACTING_REMOTE_SERVERS...");
+        log("contacting remote servers..");
 
         // Simulate successful data pull for the demo
         setTimeout(() => {
@@ -159,7 +159,7 @@
             btn.style.display = 'block';
             btn.classList.remove('hiding');
             btn.classList.add('showing');
-            log("DATA_SYNC_SUCCESS");
+            log("data sync loaded.");
         }, 1500);
     }
 </script>
